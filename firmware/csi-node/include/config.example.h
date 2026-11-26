@@ -25,6 +25,12 @@
 // usual choice for motion and breathing; 50 Hz halves network traffic.
 #define CSI_PING_HZ        100
 
+// Who to ping. Each reply passes through the router, so its CSI is captured
+// either way. Default: the gateway computer, because many routers start
+// ignoring 100 pings/s aimed at themselves ("ICMP flood protection").
+// Set to "" to ping the router. If replies stop, the node switches targets.
+#define CSI_PING_TARGET_HOST CSI_GATEWAY_HOST
+
 // Frames per WebSocket message (batching keeps the message rate ~10/s).
 #define CSI_BATCH_FRAMES   10
 
