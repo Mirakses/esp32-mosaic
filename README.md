@@ -227,6 +227,13 @@ pip install mcp
 python3 mosaic_mcp.py    # or wire into your MCP client
 ```
 
+### Live CSI view (ESP32-S3)
+
+`firmware/csi-node` is a minimal headless firmware for any ESP32-S3 board that
+streams raw per-subcarrier CSI to the gateway; open `http://<gateway>:9000/viz`
+for a live waterfall and motion meter. No board yet? `python3 gateway/csi_sim.py`
+streams a synthetic room. See [`firmware/csi-node/README.md`](firmware/csi-node/README.md).
+
 ### Tests (gateway)
 
 ```bash

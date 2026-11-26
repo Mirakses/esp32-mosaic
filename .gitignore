@@ -19,3 +19,5 @@ firmware/managed_components/
 *.jsonl
 .orb/
 .pytest_cache/
+firmware/csi-node/.pio/
+firmware/csi-node/include/config.h

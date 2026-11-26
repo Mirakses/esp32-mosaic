@@ -221,6 +221,32 @@ above) and resumes with a relearned baseline after reconnection. BLE
 scanning time-slices the same 2.4 GHz radio via coexistence arbitration,
 which may thin the CSI sample stream slightly.
 
+### `csi_raw` — live per-subcarrier CSI amplitudes (firmware/csi-node)
+
+High-rate stream from the headless ESP32-S3 CSI node, sent over WebSocket
+(`/ws`). Each envelope batches ~10 frames (≈10 envelopes/s at 100 Hz).
+
+```json
+{
+  "v": 1, "node": "csi-01", "type": "csi_raw", "ts": 1754316000,
+  "payload": {
+    "n_sub": 64, "hz": 100, "channel": 6, "dropped": 0,
+    "frames": [[123456, -48, "<base64: 64 amplitude bytes>"], ...]
+  }
+}
+```
+
+- `frames[i]` = `[node_millis, rssi_dbm, base64(amp[64])]`; `amp[k]` is
+  `|H_k|` clamped to 0..255 for the L-LTF (20 MHz) in ESP32 buffer order:
+  subcarriers 0..31 then −32..−1. DC (0) and ±27..±32 carry no signal.
+- `dropped` = cumulative frames lost on the node (queue full).
+- **Live only:** the gateway does not store `csi_raw` in SQLite or in the
+  canonical JSONL. It is forwarded only to read-only `/live` WebSocket
+  viewers (never echoed to `/ws` clients). `csi_raw_record: true` in
+  `config.yaml` appends it to `<data_dir>/csi_raw.jsonl` for offline work.
+- Live view: `http://<gateway>:9000/viz` (append `?token=…` if
+  `ingest_token` is set). Hardware-free test: `gateway/csi_sim.py`.
+
 ### `imu` — motion/context from the node's IMU
 ```json
 {
