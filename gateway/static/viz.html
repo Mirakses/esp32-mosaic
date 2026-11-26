@@ -7,7 +7,7 @@
 <link rel="icon" href="data:,">
 <style>
   :root { --bg:#0d1014; --panel:#161b22; --line:#2a313b; --text:#e6e9ee; --dim:#8b95a3;
-          --calm:#3fb68b; --move:#f2994a; --bad:#e5534b; }
+          --calm:#3fb68b; --move:#f2994a; --breath:#6cb6ff; --bad:#e5534b; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--text);
          font:14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
@@ -16,7 +16,7 @@
   h1 { font-size:16px; margin:0; font-weight:600; }
   .pill { padding:2px 10px; border-radius:99px; background:var(--panel); color:var(--dim); font-size:12px; }
   .pill.ok { color:var(--calm); } .pill.bad { color:var(--bad); }
-  .stats { display:flex; gap:16px; color:var(--dim); font-variant-numeric:tabular-nums; }
+  .stats { display:flex; flex-wrap:wrap; gap:6px 16px; color:var(--dim); font-variant-numeric:tabular-nums; }
   .stats b { color:var(--text); font-weight:600; }
   select, button { background:var(--panel); color:var(--text); border:1px solid var(--line);
                    border-radius:6px; padding:5px 10px; font:inherit; }
@@ -26,14 +26,17 @@
   .row { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:10px; margin-bottom:8px; }
   h2 { font-size:13px; margin:0; color:var(--dim); font-weight:500; }
   canvas { display:block; width:100%; border-radius:6px; background:#000; }
-  #state { font-size:34px; font-weight:700; letter-spacing:.5px; }
-  #state.calm { color:var(--calm); } #state.move { color:var(--move); } #state.none { color:var(--dim); }
+  .big { font-size:34px; font-weight:700; letter-spacing:.5px; font-variant-numeric:tabular-nums; }
+  .calm { color:var(--calm); } .move { color:var(--move); } .none { color:var(--dim); } .breath { color:var(--breath); }
   .hint { color:var(--dim); font-size:12px; }
   .seg button.on { border-color:var(--calm); color:var(--calm); }
-  .top { display:grid; grid-template-columns: 220px 1fr; gap:14px; }
-  @media (max-width:700px) { .top { grid-template-columns:1fr; } #state { font-size:28px; } }
+  .top { display:grid; grid-template-columns: 240px 1fr; gap:14px; }
+  .side { display:grid; gap:14px; align-content:start; }
+  @media (max-width:760px) { .top { grid-template-columns:1fr; } .big { font-size:28px; } }
   label { color:var(--dim); font-size:12px; display:flex; gap:6px; align-items:center; }
   input[type=range] { width:140px; }
+  .bar { height:6px; background:#000; border-radius:3px; overflow:hidden; margin-top:8px; }
+  .bar i { display:block; height:100%; width:0; background:var(--breath); transition:width .4s; }
 </style>
 </head>
 <body>
@@ -51,72 +54,103 @@
 
 <main>
   <div class="top">
-    <section>
-      <h2>Стан кімнати</h2>
-      <div id="state" class="none">—</div>
-      <div class="hint" id="stateHint">чекаю на кадри CSI</div>
-    </section>
-    <section>
-      <div class="row">
-        <h2>Рівень руху · останні 60 с</h2>
-        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap">
-          <label>поріг <input id="thr" type="range" min="1" max="200" value="30"><span id="thrVal"></span></label>
-          <button id="calib" title="Залиш кімнату порожньою і нерухомою на 10 секунд">Калібрувати (10 с)</button>
+    <div class="side">
+      <section>
+        <h2>Стан кімнати</h2>
+        <div id="state" class="big none">—</div>
+        <div class="hint" id="stateHint">чекаю на кадри CSI</div>
+      </section>
+      <section>
+        <h2>Дихання</h2>
+        <div id="br" class="big none">—</div>
+        <div class="hint" id="brHint">потрібно ~30 с спокою</div>
+        <div class="bar" title="Впевненість"><i id="brQ"></i></div>
+      </section>
+    </div>
+    <div class="side">
+      <section>
+        <div class="row">
+          <h2>Рівень руху · останні 60 с</h2>
+          <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap">
+            <label>поріг <input id="thr" type="range" min="1" max="300" value="30"><span id="thrVal"></span></label>
+            <button id="calib" title="Залиш кімнату порожньою і нерухомою на 10 секунд">Калібрувати (10 с)</button>
+          </div>
         </div>
-      </div>
-      <canvas id="motion" height="150"></canvas>
-    </section>
+        <canvas id="motion" height="140"></canvas>
+      </section>
+      <section>
+        <div class="row">
+          <h2>Хвиля дихання · останні 30 с</h2>
+          <span class="hint" id="brSub"></span>
+        </div>
+        <canvas id="wave" height="110"></canvas>
+      </section>
+    </div>
   </div>
 
   <section>
     <div class="row">
-      <h2>«Водоспад» каналу · 52 піднесучі × останні ~10 с</h2>
+      <h2 id="fallTitle">«Водоспад» каналу · 52 піднесучі</h2>
       <div class="seg" id="mode">
         <button data-m="delta" class="on" title="Відхилення від середнього: рух світиться">Зміни</button>
         <button data-m="amp" title="Нормована амплітуда кожної піднесучої">Амплітуда</button>
       </div>
     </div>
     <canvas id="fall" height="260"></canvas>
-    <div class="hint" style="margin-top:6px">По горизонталі — час (новіше праворуч), по вертикалі — піднесучі Wi-Fi від −26 до +26.
+    <div class="hint" style="margin-top:6px">По горизонталі — час (новіше праворуч), по вертикалі — піднесучі Wi-Fi від +26 (вгорі) до −26.
       Коли хтось рухається, смуги «закипають».</div>
   </section>
 </main>
 
 <script>
 "use strict";
-// ---------- subcarrier layout (ESP32-S3, L-LTF, 20 MHz) ----------
-// Buffer order: subcarriers 0..31 then −32..−1. Null/guard: 0 (DC), ±27..±32.
-// Display order top→bottom: +26 … +1, −1 … −26 (52 useful subcarriers).
+// ================= signal model =================
+// ESP32-S3 L-LTF buffer: subcarriers 0..31 then −32..−1. DC (0) and ±27..±32
+// carry nothing. Display order top→bottom: +26 … +1, −1 … −26.
 const ORDER = [];
 for (let k = 26; k >= 1; k--) ORDER.push(k);
 for (let k = -1; k >= -26; k--) ORDER.push(64 + k);
 const NS = ORDER.length;
+// Subcarriers used for the metrics: skip ±1 (DC leakage — the bright line in
+// the middle of the waterfall) and ±25..±26 (band edges, low SNR).
+const USE = [];
+ORDER.forEach((b, i) => { const k = b < 32 ? b : b - 64; if (Math.abs(k) >= 2 && Math.abs(k) <= 24) USE.push(i); });
 
-const WIN = 100;          // frames in the motion window (~1 s at 100 Hz)
-const HIST_S = 60;        // motion chart span, seconds
+const RATE = 20;              // frames are resampled into fixed 50 ms buckets (20 Hz)
+const BUCKET_MS = 1000 / RATE;
+const KEEP_S = 40;            // seconds of resampled history kept per node
+const MOTION_WIN = RATE;      // 1 s window for the motion score
+const HIST_S = 60;            // motion chart span
+const QUIET_HOLD_S = 3;       // hysteresis: seconds below threshold before "quiet"
+const BR_WIN_S = 30;          // breathing analysis window
+const BR_DEC = 4;             // 20 Hz → 5 Hz for breathing
+const BR_FMIN = 0.1, BR_FMAX = 0.6;   // 6..36 breaths/min
+const BR_STILL_S = 15;        // breathing needs this long without motion
+const BR_QMIN = 4;            // min spectral peak-to-mean ratio to trust a rate
 
 const $ = id => document.getElementById(id);
 const params = new URLSearchParams(location.search);
 let mode = "delta";
-let threshold = +(localStorage.getItem("mosaic.thr") || 30);
-$("thr").value = threshold;
+let threshold = +(localStorage.getItem("mosaic.thr2") || 30);
 
-// ---------- per-node state ----------
-const nodes = {};         // name -> state
+// ================= per-node state =================
+const nodes = {};
 let current = "";
 
 function nodeState(name) {
   if (!nodes[name]) {
     nodes[name] = {
-      ema: null, ring: [], motion: [], frames: 0, lastRate: 0, rssi: 0, chan: "–", dropped: 0,
-      calib: null,
+      bucket: null, acc: new Float32Array(NS), accN: 0,
+      s20: [],            // resampled normalized vectors (20 Hz)
+      ema: null,          // slow baseline per subcarrier (waterfall "delta" mode)
+      motion: [], score: 0, moving: false, quietSince: performance.now(), lastMoveAt: -1e9,
+      frames: 0, lastRate: 0, rssi: 0, chan: "–", dropped: 0, calib: null,
+      br: null,
     };
     const opt = document.createElement("option");
     opt.value = name; opt.textContent = name;
-    const sel = $("node");
-    if (!current) { sel.innerHTML = ""; current = name; }
-    sel.appendChild(opt);
-    sel.value = current;
+    if (!current) { $("node").innerHTML = ""; current = name; }
+    $("node").appendChild(opt); $("node").value = current;
   }
   return nodes[name];
 }
@@ -128,96 +162,164 @@ function decode(b64) {
   return a;
 }
 
-// One CSI frame → normalized 52-vector (divides out the receiver's
-// automatic gain changes so only the *shape* of the channel remains).
+// One CSI frame → 52 amplitudes divided by their mean: removes the receiver's
+// automatic gain jumps so only the *shape* of the channel remains.
 function normalize(raw) {
-  const v = new Float32Array(NS);
-  let sum = 0;
+  const v = new Float32Array(NS); let sum = 0;
   for (let i = 0; i < NS; i++) { v[i] = raw[ORDER[i]]; sum += v[i]; }
-  const mean = sum / NS || 1;
-  for (let i = 0; i < NS; i++) v[i] /= mean;
+  const m = sum / NS || 1;
+  for (let i = 0; i < NS; i++) v[i] /= m;
   return v;
 }
 
-// Motion score = mean over subcarriers of the std-dev over the last WIN
-// frames (×1000). A still room gives a flat channel → low score.
-function motionScore(ring) {
-  const n = ring.length; if (n < 10) return 0;
-  let acc = 0;
-  for (let i = 0; i < NS; i++) {
-    let s = 0, s2 = 0;
-    for (let j = 0; j < n; j++) { const x = ring[j][i]; s += x; s2 += x * x; }
-    const m = s / n;
-    acc += Math.sqrt(Math.max(0, s2 / n - m * m));
+// Frames arrive at an uneven ~100-130 Hz (pings + router beacons). Average
+// them into fixed 50 ms buckets: uniform sampling for the spectral analysis
+// and √n less white noise for the motion score.
+function onFrame(name, raw, rssi, tMs) {
+  const st = nodeState(name);
+  st.frames++; st.rssi = rssi;
+  const b = Math.floor(tMs / BUCKET_MS);
+  if (st.bucket !== null && (b < st.bucket || b - st.bucket > RATE * 5)) {   // node rebooted / long gap
+    st.s20 = []; st.bucket = null; st.accN = 0; st.acc.fill(0);
   }
-  return acc / NS * 1000;
+  if (st.bucket !== null && b !== st.bucket && st.accN) {
+    const v = new Float32Array(NS);
+    for (let i = 0; i < NS; i++) v[i] = st.acc[i] / st.accN;
+    // fill missed buckets by holding the last value (keeps the time axis honest)
+    for (let k = st.bucket; k < b; k++) pushSample(name, st, v);
+    st.acc.fill(0); st.accN = 0;
+  }
+  st.bucket = b;
+  const v = normalize(raw);
+  for (let i = 0; i < NS; i++) st.acc[i] += v[i];
+  st.accN++;
 }
 
-function onFrame(name, raw, rssi) {
-  const st = nodeState(name);
-  const v = normalize(raw);
-  st.ring.push(v); if (st.ring.length > WIN) st.ring.shift();
+function pushSample(name, st, v) {
+  st.s20.push(v);
+  if (st.s20.length > KEEP_S * RATE) st.s20.shift();
   if (!st.ema) st.ema = Float32Array.from(v);
-  for (let i = 0; i < NS; i++) st.ema[i] += 0.02 * (v[i] - st.ema[i]);
-  st.frames++; st.rssi = rssi;
+  for (let i = 0; i < NS; i++) st.ema[i] += 0.03 * (v[i] - st.ema[i]);
   if (name === current) pushColumn(v, st.ema);
 }
 
-// ---------- WebSocket ----------
+// Motion score: mean over the clean subcarriers of the std-dev across the last
+// second (×1000), lightly smoothed. Still room → flat channel → low score.
+function motionScore(st) {
+  const s = st.s20, n = Math.min(MOTION_WIN, s.length);
+  if (n < 5) return 0;
+  let acc = 0;
+  for (const i of USE) {
+    let a = 0, a2 = 0;
+    for (let j = s.length - n; j < s.length; j++) { const x = s[j][i]; a += x; a2 += x * x; }
+    const m = a / n; acc += Math.sqrt(Math.max(0, a2 / n - m * m));
+  }
+  return acc / USE.length * 1000;
+}
+
+// ================= breathing =================
+// Last 30 s at 5 Hz; per subcarrier: remove mean + linear trend, Hann window,
+// DFT on a fine 0.1–0.6 Hz grid. Subcarriers whose energy concentrates in the
+// band are the ones the chest movement modulates; average the spectra of the
+// best 8 and take the peak.
+const BR_FREQS = []; for (let f = BR_FMIN; f <= BR_FMAX + 1e-9; f += 0.005) BR_FREQS.push(f);
+
+function breathing(st) {
+  const fs = RATE / BR_DEC, N = Math.floor(BR_WIN_S * fs);
+  if (st.s20.length < N * BR_DEC) return { state: "wait", left: Math.ceil((N * BR_DEC - st.s20.length) / RATE) };
+  const start = st.s20.length - N * BR_DEC;
+  const hann = new Float32Array(N);
+  for (let t = 0; t < N; t++) hann[t] = 0.5 - 0.5 * Math.cos(2 * Math.PI * t / (N - 1));
+  const per = [];
+  for (const i of USE) {
+    const x = new Float32Array(N);
+    for (let t = 0; t < N; t++) {        // decimate by averaging BR_DEC samples
+      let a = 0; for (let k = 0; k < BR_DEC; k++) a += st.s20[start + t * BR_DEC + k][i];
+      x[t] = a / BR_DEC;
+    }
+    // detrend (least squares line)
+    let sx = 0, sy = 0, sxx = 0, sxy = 0;
+    for (let t = 0; t < N; t++) { sx += t; sy += x[t]; sxx += t * t; sxy += t * x[t]; }
+    const slope = (N * sxy - sx * sy) / (N * sxx - sx * sx), icpt = (sy - slope * sx) / N;
+    const raw = new Float32Array(N);
+    let total = 0;
+    for (let t = 0; t < N; t++) { raw[t] = x[t] - icpt - slope * t; total += raw[t] * raw[t]; x[t] = raw[t] * hann[t]; }
+    if (total <= 0) continue;
+    const P = new Float32Array(BR_FREQS.length); let band = 0;
+    BR_FREQS.forEach((f, j) => {
+      const w = 2 * Math.PI * f / fs; let re = 0, im = 0;
+      for (let t = 0; t < N; t++) { re += x[t] * Math.cos(w * t); im -= x[t] * Math.sin(w * t); }
+      P[j] = re * re + im * im; band += P[j];
+    });
+    per.push({ i, P, band, frac: band / total, raw });
+  }
+  if (!per.length) return { state: "wait", left: 0 };
+  per.sort((a, b) => b.frac - a.frac);
+  const top = per.slice(0, 8);
+  const S = new Float32Array(BR_FREQS.length);
+  for (const p of top) for (let j = 0; j < S.length; j++) S[j] += p.P[j] / (p.band || 1);
+  let jmax = 0; for (let j = 1; j < S.length; j++) if (S[j] > S[jmax]) jmax = j;
+  // peak quality: peak vs. mean of the spectrum away from the peak (±0.03 Hz)
+  let rest = 0, nr = 0;
+  BR_FREQS.forEach((f, j) => { if (Math.abs(f - BR_FREQS[jmax]) > 0.03) { rest += S[j]; nr++; } });
+  const q = S[jmax] / ((rest / nr) || 1e-9);
+  // waveform: best subcarrier, band-limited reconstruction (exact DFT bins in band)
+  const best = top[0], w = new Float32Array(N);
+  for (let k = Math.ceil(BR_FMIN * N / fs); k <= Math.floor(BR_FMAX * N / fs); k++) {
+    let re = 0, im = 0; const om = 2 * Math.PI * k / N;
+    for (let t = 0; t < N; t++) { re += best.raw[t] * Math.cos(om * t); im -= best.raw[t] * Math.sin(om * t); }
+    for (let t = 0; t < N; t++) w[t] += (2 / N) * (re * Math.cos(om * t) - im * Math.sin(om * t));
+  }
+  return { state: "ok", bpm: BR_FREQS[jmax] * 60, q, wave: w, sub: ORDER[best.i] < 32 ? ORDER[best.i] : ORDER[best.i] - 64 };
+}
+
+// ================= WebSocket =================
 function connect() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
   const tok = params.get("token");
   const ws = new WebSocket(`${proto}://${location.host}/live${tok ? "?token=" + encodeURIComponent(tok) : ""}`);
   ws.onopen = () => { $("conn").textContent = "підключено"; $("conn").className = "pill ok"; };
-  ws.onclose = () => {
-    $("conn").textContent = "немає з'єднання — повтор…"; $("conn").className = "pill bad";
-    setTimeout(connect, 2000);
-  };
+  ws.onclose = () => { $("conn").textContent = "немає з'єднання — повтор…"; $("conn").className = "pill bad"; setTimeout(connect, 2000); };
   ws.onmessage = ev => {
     let rec; try { rec = JSON.parse(ev.data); } catch { return; }
     if (rec.type !== "csi_raw" || !rec.payload || !rec.payload.frames) return;
     const st = nodeState(rec.node);
-    st.chan = rec.payload.channel ?? "–";
-    st.dropped = rec.payload.dropped ?? 0;
-    for (const f of rec.payload.frames) onFrame(rec.node, decode(f[2]), f[1]);
+    st.chan = rec.payload.channel ?? "–"; st.dropped = rec.payload.dropped ?? 0;
+    for (const f of rec.payload.frames) onFrame(rec.node, decode(f[2]), f[1], f[0]);
   };
 }
 
-// ---------- waterfall ----------
+// ================= waterfall =================
 const fall = $("fall"), fctx = fall.getContext("2d");
 let colImg = null;
 function sizeCanvases() {
-  for (const c of [fall, $("motion")]) {
+  for (const c of [fall, $("motion"), $("wave")]) {
     const w = Math.max(300, Math.floor(c.clientWidth * devicePixelRatio));
     const h = Math.floor(c.getAttribute("height") * devicePixelRatio);
     if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
   }
   colImg = fctx.createImageData(1, fall.height);
+  const secs = Math.round(fall.width / RATE);
+  $("fallTitle").textContent = `«Водоспад» каналу · 52 піднесучі × останні ${secs >= 90 ? Math.round(secs / 60) + " хв" : secs + " с"}`;
 }
 function clearFall() { fctx.fillStyle = "#000"; fctx.fillRect(0, 0, fall.width, fall.height); }
 
-// perceptual-ish dark→bright colormap (black, indigo, magenta, orange, pale yellow)
 const STOPS = [[0,0,0],[40,20,90],[150,30,130],[240,110,50],[255,240,170]];
 function cmap(t) {
   t = Math.min(1, Math.max(0, t)) * (STOPS.length - 1);
   const i = Math.min(STOPS.length - 2, Math.floor(t)), f = t - i, a = STOPS[i], b = STOPS[i + 1];
   return [a[0] + (b[0]-a[0])*f, a[1] + (b[1]-a[1])*f, a[2] + (b[2]-a[2])*f];
 }
-
 let pending = [];
 function pushColumn(v, ema) {
   const col = new Float32Array(NS);
-  for (let i = 0; i < NS; i++) {
-    col[i] = mode === "delta" ? Math.sqrt(Math.abs(v[i] - ema[i]) * 1.5) : (v[i] - 0.3) / 1.4;
-  }
+  for (let i = 0; i < NS; i++) col[i] = mode === "delta" ? Math.sqrt(Math.abs(v[i] - ema[i]) * 2.5) : (v[i] - 0.3) / 1.4;
   pending.push(col);
 }
-
 function drawFall() {
   if (!pending.length) return;
-  if (pending.length > fall.width) pending = pending.slice(-fall.width);  // tab was hidden
+  if (pending.length > fall.width) pending = pending.slice(-fall.width);
   const n = pending.length, W = fall.width, H = fall.height;
-  // scroll left by n pixels, then paint the new columns at the right edge
   fctx.drawImage(fall, n, 0, W - n, H, 0, 0, W - n, H);
   const rowH = H / NS, d = colImg.data;
   for (let c = 0; c < n; c++) {
@@ -231,86 +333,136 @@ function drawFall() {
   pending = [];
 }
 
-// ---------- motion chart + state ----------
+// ================= charts =================
 const mc = $("motion"), mctx = mc.getContext("2d");
 function drawMotion(st) {
-  const W = mc.width, H = mc.height, dpr = devicePixelRatio;
+  const W = mc.width, H = mc.height, dpr = devicePixelRatio, now = performance.now();
   mctx.clearRect(0, 0, W, H);
   const pts = st ? st.motion : [];
-  const maxV = Math.max(threshold * 2, ...pts.map(p => p.v), 10);
+  let peak = 10; for (const p of pts) peak = Math.max(peak, p.v);
+  const maxV = Math.max(threshold * 2, peak);
   const y = v => H - 6 * dpr - (v / maxV) * (H - 16 * dpr);
-  const now = performance.now();
-  // threshold line
-  mctx.strokeStyle = "rgba(242,153,74,.7)"; mctx.setLineDash([6*dpr, 6*dpr]); mctx.lineWidth = dpr;
-  mctx.beginPath(); mctx.moveTo(0, y(threshold)); mctx.lineTo(W, y(threshold)); mctx.stroke();
-  mctx.setLineDash([]);
-  // series
-  mctx.strokeStyle = "#3fb68b"; mctx.lineWidth = 2 * dpr; mctx.beginPath();
+  const x = t => W - ((now - t) / (HIST_S * 1000)) * W;
+  // shade the "motion" periods
+  mctx.fillStyle = "rgba(242,153,74,.12)";
+  let s0 = null;
   pts.forEach((p, i) => {
-    const x = W - ((now - p.t) / (HIST_S * 1000)) * W;
-    i ? mctx.lineTo(x, y(p.v)) : mctx.moveTo(x, y(p.v));
+    if (p.m && s0 === null) s0 = p.t;
+    if ((!p.m || i === pts.length - 1) && s0 !== null) { mctx.fillRect(x(s0), 0, x(p.t) - x(s0), H); s0 = null; }
   });
+  mctx.strokeStyle = "rgba(242,153,74,.7)"; mctx.setLineDash([6*dpr, 6*dpr]); mctx.lineWidth = dpr;
+  mctx.beginPath(); mctx.moveTo(0, y(threshold)); mctx.lineTo(W, y(threshold)); mctx.stroke(); mctx.setLineDash([]);
+  mctx.strokeStyle = "#3fb68b"; mctx.lineWidth = 2 * dpr; mctx.beginPath();
+  pts.forEach((p, i) => i ? mctx.lineTo(x(p.t), y(p.v)) : mctx.moveTo(x(p.t), y(p.v)));
   mctx.stroke();
   mctx.fillStyle = "#8b95a3"; mctx.font = `${11*dpr}px sans-serif`;
   mctx.fillText("−60 с", 4*dpr, H - 4*dpr); mctx.fillText("зараз", W - 36*dpr, H - 4*dpr);
 }
 
+const wc = $("wave"), wctx = wc.getContext("2d");
+function drawWave(br, ok) {
+  const W = wc.width, H = wc.height, dpr = devicePixelRatio;
+  wctx.clearRect(0, 0, W, H);
+  wctx.strokeStyle = "#2a313b"; wctx.lineWidth = dpr;
+  wctx.beginPath(); wctx.moveTo(0, H / 2); wctx.lineTo(W, H / 2); wctx.stroke();
+  if (!br || br.state !== "ok") return;
+  const w = br.wave; let m = 1e-9; for (const v of w) m = Math.max(m, Math.abs(v));
+  wctx.strokeStyle = ok ? "#6cb6ff" : "rgba(139,149,163,.5)"; wctx.lineWidth = 2 * dpr; wctx.beginPath();
+  for (let t = 0; t < w.length; t++) {
+    const px = t / (w.length - 1) * W, py = H / 2 - w[t] / m * (H / 2 - 8 * dpr);
+    t ? wctx.lineTo(px, py) : wctx.moveTo(px, py);
+  }
+  wctx.stroke();
+}
+
+// ================= controls =================
 function setThreshold(v) {
   threshold = Math.max(1, Math.round(v));
-  $("thr").value = Math.min(200, threshold); $("thrVal").textContent = threshold;
-  localStorage.setItem("mosaic.thr", threshold);
+  $("thr").value = Math.min(300, threshold); $("thrVal").textContent = threshold;
+  localStorage.setItem("mosaic.thr2", threshold);
 }
 $("thr").oninput = e => setThreshold(+e.target.value);
 setThreshold(threshold);
-
 $("calib").onclick = () => {
   const st = nodes[current]; if (!st) return;
   st.calib = { until: performance.now() + 10000, vals: [] };
   $("calib").textContent = "калібрую… не рухайся";
 };
-
 document.querySelectorAll("#mode button").forEach(b => b.onclick = () => {
   mode = b.dataset.m;
   document.querySelectorAll("#mode button").forEach(x => x.classList.toggle("on", x === b));
   clearFall();
 });
 
-let lastTick = performance.now();
-setInterval(() => {               // 10 Hz: motion score, state, stats
+// ================= main loop =================
+let lastTick = performance.now(), lastBr = 0;
+setInterval(() => {                      // 10 Hz
   const now = performance.now();
   for (const [name, st] of Object.entries(nodes)) {
-    const v = motionScore(st.ring);
-    st.motion.push({ t: now, v });
+    const raw = motionScore(st);
+    st.score += 0.4 * (raw - st.score);
+    // hysteresis: enter above the threshold, leave after QUIET_HOLD_S below 80 % of it
+    if (st.score > threshold) { st.moving = true; st.quietSince = null; }
+    else if (st.score < threshold * 0.8) {
+      if (st.quietSince === null) st.quietSince = now;
+      if (now - st.quietSince > QUIET_HOLD_S * 1000) st.moving = false;
+    }
+    if (st.moving) st.lastMoveAt = now;
+    st.motion.push({ t: now, v: st.score, m: st.moving });
     while (st.motion.length && now - st.motion[0].t > HIST_S * 1000) st.motion.shift();
     if (st.calib) {
-      st.calib.vals.push(v);
+      st.calib.vals.push(st.score);
       if (now > st.calib.until) {
-        const a = st.calib.vals, m = a.reduce((s, x) => s + x, 0) / a.length;
-        const sd = Math.sqrt(a.reduce((s, x) => s + (x - m) ** 2, 0) / a.length);
-        if (name === current) setThreshold(m + 4 * sd + 2);
+        const a = st.calib.vals.slice().sort((p, q) => p - q);
+        const p95 = a[Math.floor(a.length * 0.95)] || 0;
+        const m = a.reduce((s, x) => s + x, 0) / a.length;
+        if (name === current) setThreshold(Math.max(p95 * 1.5, m * 1.8) + 2);
         st.calib = null; $("calib").textContent = "Калібрувати (10 с)";
       }
     }
   }
-  if (now - lastTick >= 1000) {   // 1 Hz: frame rate
+  if (now - lastTick >= 1000) {
     for (const st of Object.values(nodes)) { st.lastRate = st.frames / ((now - lastTick) / 1000); st.frames = 0; }
     lastTick = now;
   }
   const st = nodes[current];
-  if (st) {
-    $("fps").textContent = st.lastRate.toFixed(0);
-    $("rssi").textContent = st.rssi + " дБм";
-    $("chan").textContent = st.chan;
-    $("drop").textContent = st.dropped;
-    const last = st.motion.length ? st.motion[st.motion.length - 1].v : 0;
-    const stale = st.lastRate < 5;
-    const el = $("state");
-    if (stale) { el.textContent = "немає даних"; el.className = "none"; $("stateHint").textContent = "вузол не надсилає кадри"; }
-    else if (last > threshold) { el.textContent = "РУХ"; el.className = "move"; $("stateHint").textContent = `рівень ${last.toFixed(0)} > поріг ${threshold}`; }
-    else { el.textContent = "тихо"; el.className = "calm"; $("stateHint").textContent = `рівень ${last.toFixed(0)} ≤ поріг ${threshold}`; }
-  }
+  if (st && now - lastBr >= 1000) { st.br = breathing(st); lastBr = now; }
+  if (st) render(st, now);
   drawMotion(st);
 }, 100);
+
+function render(st, now) {
+  $("fps").textContent = st.lastRate.toFixed(0);
+  $("rssi").textContent = st.rssi + " дБм";
+  $("chan").textContent = st.chan; $("drop").textContent = st.dropped;
+  const el = $("state");
+  if (st.lastRate < 5) {
+    el.textContent = "немає даних"; el.className = "big none"; $("stateHint").textContent = "вузол не надсилає кадри";
+  } else if (st.moving) {
+    el.textContent = "РУХ"; el.className = "big move"; $("stateHint").textContent = `рівень ${st.score.toFixed(0)} · поріг ${threshold}`;
+  } else {
+    el.textContent = "тихо"; el.className = "big calm"; $("stateHint").textContent = `рівень ${st.score.toFixed(0)} · поріг ${threshold}`;
+  }
+  // breathing panel
+  const br = st.br, still = (now - st.lastMoveAt) / 1000;
+  const b = $("br"), h = $("brHint");
+  let ok = false;
+  if (!br || br.state === "wait") {
+    b.textContent = "—"; b.className = "big none"; h.textContent = br ? `збираю дані… ${br.left} с` : "чекаю на дані";
+  } else if (st.moving || still < BR_STILL_S) {
+    b.textContent = "—"; b.className = "big none";
+    h.textContent = st.moving ? "рух у кімнаті — дихання не видно" : `потрібен спокій ще ${Math.ceil(BR_STILL_S - still)} с`;
+  } else if (br.q < BR_QMIN) {
+    b.textContent = "—"; b.className = "big none"; h.textContent = "чіткого ритму немає (нікого поруч?)";
+  } else {
+    ok = true;
+    b.textContent = `${br.bpm.toFixed(0)} /хв`; b.className = "big breath";
+    h.textContent = `вдихів за хвилину · піднесуча ${br.sub > 0 ? "+" : ""}${br.sub}`;
+  }
+  $("brQ").style.width = br && br.state === "ok" ? Math.min(100, br.q / (BR_QMIN * 3) * 100) + "%" : "0";
+  $("brSub").textContent = br && br.state === "ok" ? `впевненість ${br.q.toFixed(1)}` : "";
+  drawWave(br, ok);
+}
 
 function frame() { drawFall(); requestAnimationFrame(frame); }
 window.addEventListener("resize", () => { sizeCanvases(); clearFall(); });

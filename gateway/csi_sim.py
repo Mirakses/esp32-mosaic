@@ -2,8 +2,8 @@
 """
 csi_sim.py — synthetic csi_raw node, for testing the gateway and /viz without
 hardware. Streams 64-subcarrier amplitude frames over WebSocket exactly like
-firmware/csi-node: a static multipath channel plus noise, with a simulated
-person walking through the room every few seconds.
+firmware/csi-node: a static multipath channel plus noise, a person breathing
+(15/min by default) and walking around for 8 s of every minute.
 
   python3 csi_sim.py                       # ws://127.0.0.1:9000/ws, node csi-sim
   python3 csi_sim.py --host 192.168.1.10 --node sim-2 --token s3cret
@@ -45,13 +45,13 @@ async def run(args):
             batch, n = [], 0
             while True:
                 t = time.monotonic() - t0
-                # a body moves for 4 s out of every 10 s: one extra, moving path
-                moving = (t % 10) > 6
+                # a body walks around for the last `move` seconds of every `cycle`
+                moving = (t % args.cycle) > args.cycle - args.move
                 extra = []
                 if moving:
                     extra = [(0.6, 20 + 15 * math.sin(t * 2.1), t * 9.0)]
-                # breathing: a tiny periodic path even when "still" (0.25 Hz)
-                extra.append((0.05, 30, 0.6 * math.sin(2 * math.pi * 0.25 * t)))
+                # breathing: a person sitting still — a tiny periodic path change
+                extra.append((0.08, 30, 0.8 * math.sin(2 * math.pi * args.breath_bpm / 60 * t)))
                 amps = bytearray(64)
                 for k in range(64):
                     sub = k if k < 32 else k - 64
@@ -81,6 +81,9 @@ def main():
     ap.add_argument("--token", default="")
     ap.add_argument("--hz", type=int, default=100)
     ap.add_argument("--batch", type=int, default=10)
+    ap.add_argument("--cycle", type=float, default=60, help="seconds per walk cycle")
+    ap.add_argument("--move", type=float, default=8, help="seconds of walking per cycle")
+    ap.add_argument("--breath-bpm", type=float, default=15, help="simulated breathing rate")
     try:
         asyncio.run(run(ap.parse_args()))
     except KeyboardInterrupt:

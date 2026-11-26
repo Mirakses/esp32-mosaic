@@ -663,7 +663,18 @@ def main():
         if task:
             task.cancel()
 
+    async def _close_websockets(app):
+        # Close live sockets before aiohttp cancels their handlers: otherwise
+        # Ctrl+C dumps a CancelledError/InvalidStateError traceback per
+        # connected viewer (harmless, but it looks like a crash).
+        for ws in list(gw.viewers) + list(gw.subscribers):
+            try:
+                await ws.close(code=1001, message=b"gateway shutdown")
+            except Exception:
+                pass
+
     app.on_startup.append(_start_background)
+    app.on_shutdown.append(_close_websockets)
     app.on_cleanup.append(_stop_background)
 
     log("INFO", f"ORB gateway v1 on :{server['port']} (log={server['log_file']}, db={server['db_file']})")
