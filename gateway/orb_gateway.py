@@ -73,9 +73,18 @@ def load_config():
     wm.update({k: v for k, v in wm_cfg.items() if v is not None})
 
     token = cfg.get("ingest_token", "") or ""
+    server["csi_raw_record"] = bool(cfg.get("csi_raw_record", False))
     return server, wm, token
 
-VALID_TYPES = {"scan", "csi", "imu", "state", "wifi"}
+VALID_TYPES = {"scan", "csi", "imu", "state", "wifi", "csi_raw"}
+
+# csi_raw = high-rate per-subcarrier CSI amplitudes from firmware/csi-node
+# (~100 frames/s per node). It is a LIVE stream: not stored in SQLite and not
+# written to the canonical JSONL (≈1 GB/day per node), only fanned out to
+# /live viewers (the /viz page). Set csi_raw_record: true in config.yaml to
+# append it to <data_dir>/csi_raw.jsonl for offline analysis.
+LIVE_ONLY_TYPES = {"csi_raw"}
+STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
 # How often the gateway writes a heartbeat line to its console log, so a
 # quiet log is provably alive (a silent channel must be distinguishable
@@ -400,7 +409,10 @@ class Gateway:
         os.makedirs(server["data_dir"], exist_ok=True)
         self.log_file = server["log_file"]
         self.db = DB(server["db_file"])
-        self.subscribers = set()  # WebSocket clients
+        self.subscribers = set()  # WebSocket clients on /ws (nodes + listeners)
+        self.viewers = set()      # read-only WebSocket clients on /live (/viz page)
+        self.live_stats = {}      # node -> live-only envelopes since last heartbeat
+        self.csi_raw_record = False
 
     def stamp(self, envelope, source_ip):
         """Validate + stamp an envelope. Returns (rec, error)."""
@@ -440,6 +452,13 @@ class Gateway:
             claimed_node = envelope.get("node", "?") if isinstance(envelope, dict) else "?"
             log("WARN", f"ingest {source_ip or '?'} rejected: {err} type={claimed_type} node={claimed_node}")
             return 400, {"error": err}
+        if rec["type"] in LIVE_ONLY_TYPES:
+            self.live_stats[rec["node"]] = self.live_stats.get(rec["node"], 0) + 1
+            if self.csi_raw_record:
+                with open(os.path.join(self.server["data_dir"], "csi_raw.jsonl"), "a") as f:
+                    f.write(json.dumps(rec) + "\n")
+            self.broadcast(rec, viewers_only=True)
+            return 200, {"ok": True}
         # Canonical JSONL log (source of truth)
         with open(self.log_file, "a") as f:
             f.write(json.dumps(rec) + "\n")
@@ -453,33 +472,40 @@ class Gateway:
         log("INFO", f"ingest {source_ip or '?'} node={(rec or {}).get('node', '?')} type={(rec or {}).get('type', '?')} -> 200")
         return 200, {"ok": True}
 
-    def broadcast(self, rec):
-        """Fan a stored record out to every live WebSocket subscriber.
+    def broadcast(self, rec, viewers_only=False):
+        """Fan a record out to live WebSocket clients.
 
         ws.send_str() is a coroutine: calling it from this synchronous path
         without scheduling it created a coroutine object that was never
         awaited, so live subscribers silently received nothing. Schedule
-        each send on the running loop instead; failures drop the subscriber.
+        each send on the running loop instead; failures drop the client.
+
+        viewers_only: high-rate streams (csi_raw) go only to /live viewers,
+        never back to /ws clients — those are mostly nodes, and echoing
+        100 frames/s to an ESP32 would choke it.
         """
-        if not self.subscribers:
+        targets = [(ws, self.viewers) for ws in self.viewers]
+        if not viewers_only:
+            targets += [(ws, self.subscribers) for ws in self.subscribers]
+        if not targets:
             return
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return  # no event loop (e.g. offline/unit use) — nothing to push to
         data = json.dumps(rec)
-        for ws in list(self.subscribers):
+        for ws, group in targets:
             if ws.closed:
-                self.subscribers.discard(ws)
+                group.discard(ws)
                 continue
-            loop.create_task(self._send_or_drop(ws, data))
+            loop.create_task(self._send_or_drop(ws, data, group))
 
-    async def _send_or_drop(self, ws, data):
+    async def _send_or_drop(self, ws, data, group=None):
         try:
             await ws.send_str(data)
         except Exception as e:
             log("WARN", f"ws broadcast failed, dropping subscriber: {e}")
-            self.subscribers.discard(ws)
+            (group if group is not None else self.subscribers).discard(ws)
 
     def authorized(self, request):
         """Shared-token check for ingest (config: ingest_token).
@@ -525,6 +551,28 @@ class Gateway:
             "csi_events": csi,
             "nodes": [dict(zip(("node", "last_seen", "last_ip"), r)) for r in self.db.recent_nodes()],
         })
+
+    async def handle_live(self, request):
+        """Read-only live feed for dashboards (the /viz page): every record,
+        including the high-rate csi_raw stream. Incoming messages ignored."""
+        if not self.authorized(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
+        ws = web.WebSocketResponse(heartbeat=30)
+        await ws.prepare(request)
+        self.viewers.add(ws)
+        log("INFO", f"[live] viewer connected ({request.remote or '?'}) ({len(self.viewers)} total)")
+        try:
+            async for msg in ws:
+                if msg.type == WSMsgType.ERROR:
+                    break
+        finally:
+            self.viewers.discard(ws)
+            log("INFO", f"[live] viewer disconnected ({len(self.viewers)} total)")
+        return ws
+
+    async def handle_viz(self, request):
+        """Live CSI visualization page (gateway/static/viz.html)."""
+        return web.FileResponse(os.path.join(STATIC_DIR, "viz.html"))
 
     async def handle_ws(self, request):
         if not self.authorized(request):
@@ -587,9 +635,12 @@ def main():
     gw = Gateway(server)
     gw.world_model = world_model
     gw.ingest_token = token
+    gw.csi_raw_record = server.get("csi_raw_record", False)
     app = web.Application()
     app.router.add_post("/orb/ingest", gw.handle_ingest)
     app.router.add_get("/ws", gw.handle_ws)
+    app.router.add_get("/live", gw.handle_live)
+    app.router.add_get("/viz", gw.handle_viz)
     app.router.add_get("/status", gw.handle_status)
     app.router.add_get("/", gw.handle_status)
 
@@ -601,7 +652,9 @@ def main():
             while True:
                 await asyncio.sleep(HEARTBEAT_SECONDS)
                 events, sightings, csi = gw.db.counts()
-                log("INFO", f"heartbeat: events={events} sightings={sightings} csi={csi} ws={len(gw.subscribers)}")
+                live = " ".join(f"{n}={c}" for n, c in sorted(gw.live_stats.items())) or "-"
+                gw.live_stats.clear()
+                log("INFO", f"heartbeat: events={events} sightings={sightings} csi={csi} ws={len(gw.subscribers)} live_viewers={len(gw.viewers)} csi_raw_msgs[{live}]")
 
         app["heartbeat_task"] = asyncio.create_task(_heartbeat())
 

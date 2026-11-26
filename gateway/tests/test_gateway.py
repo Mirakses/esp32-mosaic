@@ -103,3 +103,71 @@ def test_ws_subscriber_receives_broadcast(tmp_path):
             assert rec["type"] == "scan"
             await ws.close()
     run(go())
+
+
+def csi_raw(node="csi-01", frames=3):
+    import base64
+    amp = base64.b64encode(bytes(range(64))).decode()
+    return {"v": 1, "node": node, "type": "csi_raw", "ts": 1754316000,
+            "payload": {"n_sub": 64, "hz": 100, "channel": 6, "dropped": 0,
+                        "frames": [[i * 10, -50, amp] for i in range(frames)]}}
+
+
+def app_full(gw):
+    app = app_for(gw)
+    app.router.add_get("/live", gw.handle_live)
+    app.router.add_get("/viz", gw.handle_viz)
+    return app
+
+
+def test_csi_raw_is_live_only(tmp_path):
+    """csi_raw goes to /live viewers, is not stored, and is not echoed to /ws."""
+    async def go():
+        gw = make_gw(tmp_path)
+        async with TestClient(TestServer(app_full(gw))) as cl:
+            viewer = await cl.ws_connect("/live")
+            node_ws = await cl.ws_connect("/ws")
+            for _ in range(50):
+                if gw.viewers and gw.subscribers:
+                    break
+                await asyncio.sleep(0.01)
+            await node_ws.send_str(json.dumps(csi_raw()))
+            ack = await asyncio.wait_for(node_ws.receive(), timeout=2)
+            assert json.loads(ack.data) == {"ok": True}
+            msg = await asyncio.wait_for(viewer.receive(), timeout=2)
+            rec = json.loads(msg.data)
+            assert rec["type"] == "csi_raw" and len(rec["payload"]["frames"]) == 3
+            # the node must not get its own high-rate stream echoed back
+            with pytest.raises(asyncio.TimeoutError):
+                await asyncio.wait_for(node_ws.receive(), timeout=0.3)
+            # a normal scan still reaches both
+            r = await cl.post("/ingest", json=scan())
+            assert r.status == 200
+            assert json.loads((await asyncio.wait_for(viewer.receive(), 2)).data)["type"] == "scan"
+            assert json.loads((await asyncio.wait_for(node_ws.receive(), 2)).data)["type"] == "scan"
+            await viewer.close(); await node_ws.close()
+        c = sqlite3.connect(tmp_path / "orb.db")
+        assert c.execute("SELECT COUNT(*) FROM events WHERE type='csi_raw'").fetchone()[0] == 0
+        assert "csi_raw" not in (tmp_path / "presence.jsonl").read_text()
+        assert not (tmp_path / "csi_raw.jsonl").exists()
+    run(go())
+
+
+def test_csi_raw_record_opt_in(tmp_path):
+    gw = make_gw(tmp_path)
+    gw.csi_raw_record = True
+    assert gw.ingest(csi_raw(), "10.0.0.9")[0] == 200
+    assert (tmp_path / "csi_raw.jsonl").read_text().count("\n") == 1
+
+
+def test_viz_page_served_and_live_requires_token(tmp_path):
+    async def go():
+        gw = make_gw(tmp_path, token="t")
+        async with TestClient(TestServer(app_full(gw))) as cl:
+            r = await cl.get("/viz")
+            assert r.status == 200
+            assert "CSI наживо" in await r.text()
+            assert (await cl.get("/live")).status == 401
+            ws = await cl.ws_connect("/live?token=t")
+            await ws.close()
+    run(go())

@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mosaic · CSI наживо</title>
+<link rel="icon" href="data:,">
+<style>
+  :root { --bg:#0d1014; --panel:#161b22; --line:#2a313b; --text:#e6e9ee; --dim:#8b95a3;
+          --calm:#3fb68b; --move:#f2994a; --bad:#e5534b; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  header { display:flex; flex-wrap:wrap; gap:10px 18px; align-items:center;
+           padding:12px 16px; border-bottom:1px solid var(--line); }
+  h1 { font-size:16px; margin:0; font-weight:600; }
+  .pill { padding:2px 10px; border-radius:99px; background:var(--panel); color:var(--dim); font-size:12px; }
+  .pill.ok { color:var(--calm); } .pill.bad { color:var(--bad); }
+  .stats { display:flex; gap:16px; color:var(--dim); font-variant-numeric:tabular-nums; }
+  .stats b { color:var(--text); font-weight:600; }
+  select, button { background:var(--panel); color:var(--text); border:1px solid var(--line);
+                   border-radius:6px; padding:5px 10px; font:inherit; }
+  button { cursor:pointer; } button:hover { border-color:var(--dim); }
+  main { padding:14px 16px; display:grid; gap:14px; max-width:1400px; margin:0 auto; }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px; }
+  .row { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:10px; margin-bottom:8px; }
+  h2 { font-size:13px; margin:0; color:var(--dim); font-weight:500; }
+  canvas { display:block; width:100%; border-radius:6px; background:#000; }
+  #state { font-size:34px; font-weight:700; letter-spacing:.5px; }
+  #state.calm { color:var(--calm); } #state.move { color:var(--move); } #state.none { color:var(--dim); }
+  .hint { color:var(--dim); font-size:12px; }
+  .seg button.on { border-color:var(--calm); color:var(--calm); }
+  .top { display:grid; grid-template-columns: 220px 1fr; gap:14px; }
+  @media (max-width:700px) { .top { grid-template-columns:1fr; } #state { font-size:28px; } }
+  label { color:var(--dim); font-size:12px; display:flex; gap:6px; align-items:center; }
+  input[type=range] { width:140px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Mosaic · CSI наживо</h1>
+  <span id="conn" class="pill">з'єднання…</span>
+  <select id="node" title="Вузол"><option value="">очікую на дані…</option></select>
+  <div class="stats">
+    <span>кадрів/с <b id="fps">–</b></span>
+    <span>RSSI <b id="rssi">–</b></span>
+    <span>канал <b id="chan">–</b></span>
+    <span>втрачено <b id="drop">–</b></span>
+  </div>
+</header>
+
+<main>
+  <div class="top">
+    <section>
+      <h2>Стан кімнати</h2>
+      <div id="state" class="none">—</div>
+      <div class="hint" id="stateHint">чекаю на кадри CSI</div>
+    </section>
+    <section>
+      <div class="row">
+        <h2>Рівень руху · останні 60 с</h2>
+        <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap">
+          <label>поріг <input id="thr" type="range" min="1" max="200" value="30"><span id="thrVal"></span></label>
+          <button id="calib" title="Залиш кімнату порожньою і нерухомою на 10 секунд">Калібрувати (10 с)</button>
+        </div>
+      </div>
+      <canvas id="motion" height="150"></canvas>
+    </section>
+  </div>
+
+  <section>
+    <div class="row">
+      <h2>«Водоспад» каналу · 52 піднесучі × останні ~10 с</h2>
+      <div class="seg" id="mode">
+        <button data-m="delta" class="on" title="Відхилення від середнього: рух світиться">Зміни</button>
+        <button data-m="amp" title="Нормована амплітуда кожної піднесучої">Амплітуда</button>
+      </div>
+    </div>
+    <canvas id="fall" height="260"></canvas>
+    <div class="hint" style="margin-top:6px">По горизонталі — час (новіше праворуч), по вертикалі — піднесучі Wi-Fi від −26 до +26.
+      Коли хтось рухається, смуги «закипають».</div>
+  </section>
+</main>
+
+<script>
+"use strict";
+// ---------- subcarrier layout (ESP32-S3, L-LTF, 20 MHz) ----------
+// Buffer order: subcarriers 0..31 then −32..−1. Null/guard: 0 (DC), ±27..±32.
+// Display order top→bottom: +26 … +1, −1 … −26 (52 useful subcarriers).
+const ORDER = [];
+for (let k = 26; k >= 1; k--) ORDER.push(k);
+for (let k = -1; k >= -26; k--) ORDER.push(64 + k);
+const NS = ORDER.length;
+
+const WIN = 100;          // frames in the motion window (~1 s at 100 Hz)
+const HIST_S = 60;        // motion chart span, seconds
+
+const $ = id => document.getElementById(id);
+const params = new URLSearchParams(location.search);
+let mode = "delta";
+let threshold = +(localStorage.getItem("mosaic.thr") || 30);
+$("thr").value = threshold;
+
+// ---------- per-node state ----------
+const nodes = {};         // name -> state
+let current = "";
+
+function nodeState(name) {
+  if (!nodes[name]) {
+    nodes[name] = {
+      ema: null, ring: [], motion: [], frames: 0, lastRate: 0, rssi: 0, chan: "–", dropped: 0,
+      calib: null,
+    };
+    const opt = document.createElement("option");
+    opt.value = name; opt.textContent = name;
+    const sel = $("node");
+    if (!current) { sel.innerHTML = ""; current = name; }
+    sel.appendChild(opt);
+    sel.value = current;
+  }
+  return nodes[name];
+}
+$("node").onchange = e => { current = e.target.value; clearFall(); };
+
+function decode(b64) {
+  const s = atob(b64), a = new Uint8Array(s.length);
+  for (let i = 0; i < s.length; i++) a[i] = s.charCodeAt(i);
+  return a;
+}
+
+// One CSI frame → normalized 52-vector (divides out the receiver's
+// automatic gain changes so only the *shape* of the channel remains).
+function normalize(raw) {
+  const v = new Float32Array(NS);
+  let sum = 0;
+  for (let i = 0; i < NS; i++) { v[i] = raw[ORDER[i]]; sum += v[i]; }
+  const mean = sum / NS || 1;
+  for (let i = 0; i < NS; i++) v[i] /= mean;
+  return v;
+}
+
+// Motion score = mean over subcarriers of the std-dev over the last WIN
+// frames (×1000). A still room gives a flat channel → low score.
+function motionScore(ring) {
+  const n = ring.length; if (n < 10) return 0;
+  let acc = 0;
+  for (let i = 0; i < NS; i++) {
+    let s = 0, s2 = 0;
+    for (let j = 0; j < n; j++) { const x = ring[j][i]; s += x; s2 += x * x; }
+    const m = s / n;
+    acc += Math.sqrt(Math.max(0, s2 / n - m * m));
+  }
+  return acc / NS * 1000;
+}
+
+function onFrame(name, raw, rssi) {
+  const st = nodeState(name);
+  const v = normalize(raw);
+  st.ring.push(v); if (st.ring.length > WIN) st.ring.shift();
+  if (!st.ema) st.ema = Float32Array.from(v);
+  for (let i = 0; i < NS; i++) st.ema[i] += 0.02 * (v[i] - st.ema[i]);
+  st.frames++; st.rssi = rssi;
+  if (name === current) pushColumn(v, st.ema);
+}
+
+// ---------- WebSocket ----------
+function connect() {
+  const proto = location.protocol === "https:" ? "wss" : "ws";
+  const tok = params.get("token");
+  const ws = new WebSocket(`${proto}://${location.host}/live${tok ? "?token=" + encodeURIComponent(tok) : ""}`);
+  ws.onopen = () => { $("conn").textContent = "підключено"; $("conn").className = "pill ok"; };
+  ws.onclose = () => {
+    $("conn").textContent = "немає з'єднання — повтор…"; $("conn").className = "pill bad";
+    setTimeout(connect, 2000);
+  };
+  ws.onmessage = ev => {
+    let rec; try { rec = JSON.parse(ev.data); } catch { return; }
+    if (rec.type !== "csi_raw" || !rec.payload || !rec.payload.frames) return;
+    const st = nodeState(rec.node);
+    st.chan = rec.payload.channel ?? "–";
+    st.dropped = rec.payload.dropped ?? 0;
+    for (const f of rec.payload.frames) onFrame(rec.node, decode(f[2]), f[1]);
+  };
+}
+
+// ---------- waterfall ----------
+const fall = $("fall"), fctx = fall.getContext("2d");
+let colImg = null;
+function sizeCanvases() {
+  for (const c of [fall, $("motion")]) {
+    const w = Math.max(300, Math.floor(c.clientWidth * devicePixelRatio));
+    const h = Math.floor(c.getAttribute("height") * devicePixelRatio);
+    if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+  }
+  colImg = fctx.createImageData(1, fall.height);
+}
+function clearFall() { fctx.fillStyle = "#000"; fctx.fillRect(0, 0, fall.width, fall.height); }
+
+// perceptual-ish dark→bright colormap (black, indigo, magenta, orange, pale yellow)
+const STOPS = [[0,0,0],[40,20,90],[150,30,130],[240,110,50],[255,240,170]];
+function cmap(t) {
+  t = Math.min(1, Math.max(0, t)) * (STOPS.length - 1);
+  const i = Math.min(STOPS.length - 2, Math.floor(t)), f = t - i, a = STOPS[i], b = STOPS[i + 1];
+  return [a[0] + (b[0]-a[0])*f, a[1] + (b[1]-a[1])*f, a[2] + (b[2]-a[2])*f];
+}
+
+let pending = [];
+function pushColumn(v, ema) {
+  const col = new Float32Array(NS);
+  for (let i = 0; i < NS; i++) {
+    col[i] = mode === "delta" ? Math.sqrt(Math.abs(v[i] - ema[i]) * 1.5) : (v[i] - 0.3) / 1.4;
+  }
+  pending.push(col);
+}
+
+function drawFall() {
+  if (!pending.length) return;
+  if (pending.length > fall.width) pending = pending.slice(-fall.width);  // tab was hidden
+  const n = pending.length, W = fall.width, H = fall.height;
+  // scroll left by n pixels, then paint the new columns at the right edge
+  fctx.drawImage(fall, n, 0, W - n, H, 0, 0, W - n, H);
+  const rowH = H / NS, d = colImg.data;
+  for (let c = 0; c < n; c++) {
+    const col = pending[c];
+    for (let y = 0; y < H; y++) {
+      const [r, g, b] = cmap(col[Math.min(NS - 1, Math.floor(y / rowH))]);
+      const o = y * 4; d[o] = r; d[o+1] = g; d[o+2] = b; d[o+3] = 255;
+    }
+    fctx.putImageData(colImg, W - n + c, 0);
+  }
+  pending = [];
+}
+
+// ---------- motion chart + state ----------
+const mc = $("motion"), mctx = mc.getContext("2d");
+function drawMotion(st) {
+  const W = mc.width, H = mc.height, dpr = devicePixelRatio;
+  mctx.clearRect(0, 0, W, H);
+  const pts = st ? st.motion : [];
+  const maxV = Math.max(threshold * 2, ...pts.map(p => p.v), 10);
+  const y = v => H - 6 * dpr - (v / maxV) * (H - 16 * dpr);
+  const now = performance.now();
+  // threshold line
+  mctx.strokeStyle = "rgba(242,153,74,.7)"; mctx.setLineDash([6*dpr, 6*dpr]); mctx.lineWidth = dpr;
+  mctx.beginPath(); mctx.moveTo(0, y(threshold)); mctx.lineTo(W, y(threshold)); mctx.stroke();
+  mctx.setLineDash([]);
+  // series
+  mctx.strokeStyle = "#3fb68b"; mctx.lineWidth = 2 * dpr; mctx.beginPath();
+  pts.forEach((p, i) => {
+    const x = W - ((now - p.t) / (HIST_S * 1000)) * W;
+    i ? mctx.lineTo(x, y(p.v)) : mctx.moveTo(x, y(p.v));
+  });
+  mctx.stroke();
+  mctx.fillStyle = "#8b95a3"; mctx.font = `${11*dpr}px sans-serif`;
+  mctx.fillText("−60 с", 4*dpr, H - 4*dpr); mctx.fillText("зараз", W - 36*dpr, H - 4*dpr);
+}
+
+function setThreshold(v) {
+  threshold = Math.max(1, Math.round(v));
+  $("thr").value = Math.min(200, threshold); $("thrVal").textContent = threshold;
+  localStorage.setItem("mosaic.thr", threshold);
+}
+$("thr").oninput = e => setThreshold(+e.target.value);
+setThreshold(threshold);
+
+$("calib").onclick = () => {
+  const st = nodes[current]; if (!st) return;
+  st.calib = { until: performance.now() + 10000, vals: [] };
+  $("calib").textContent = "калібрую… не рухайся";
+};
+
+document.querySelectorAll("#mode button").forEach(b => b.onclick = () => {
+  mode = b.dataset.m;
+  document.querySelectorAll("#mode button").forEach(x => x.classList.toggle("on", x === b));
+  clearFall();
+});
+
+let lastTick = performance.now();
+setInterval(() => {               // 10 Hz: motion score, state, stats
+  const now = performance.now();
+  for (const [name, st] of Object.entries(nodes)) {
+    const v = motionScore(st.ring);
+    st.motion.push({ t: now, v });
+    while (st.motion.length && now - st.motion[0].t > HIST_S * 1000) st.motion.shift();
+    if (st.calib) {
+      st.calib.vals.push(v);
+      if (now > st.calib.until) {
+        const a = st.calib.vals, m = a.reduce((s, x) => s + x, 0) / a.length;
+        const sd = Math.sqrt(a.reduce((s, x) => s + (x - m) ** 2, 0) / a.length);
+        if (name === current) setThreshold(m + 4 * sd + 2);
+        st.calib = null; $("calib").textContent = "Калібрувати (10 с)";
+      }
+    }
+  }
+  if (now - lastTick >= 1000) {   // 1 Hz: frame rate
+    for (const st of Object.values(nodes)) { st.lastRate = st.frames / ((now - lastTick) / 1000); st.frames = 0; }
+    lastTick = now;
+  }
+  const st = nodes[current];
+  if (st) {
+    $("fps").textContent = st.lastRate.toFixed(0);
+    $("rssi").textContent = st.rssi + " дБм";
+    $("chan").textContent = st.chan;
+    $("drop").textContent = st.dropped;
+    const last = st.motion.length ? st.motion[st.motion.length - 1].v : 0;
+    const stale = st.lastRate < 5;
+    const el = $("state");
+    if (stale) { el.textContent = "немає даних"; el.className = "none"; $("stateHint").textContent = "вузол не надсилає кадри"; }
+    else if (last > threshold) { el.textContent = "РУХ"; el.className = "move"; $("stateHint").textContent = `рівень ${last.toFixed(0)} > поріг ${threshold}`; }
+    else { el.textContent = "тихо"; el.className = "calm"; $("stateHint").textContent = `рівень ${last.toFixed(0)} ≤ поріг ${threshold}`; }
+  }
+  drawMotion(st);
+}, 100);
+
+function frame() { drawFall(); requestAnimationFrame(frame); }
+window.addEventListener("resize", () => { sizeCanvases(); clearFall(); });
+sizeCanvases(); clearFall(); connect(); requestAnimationFrame(frame);
+</script>
+</body>
+</html>
